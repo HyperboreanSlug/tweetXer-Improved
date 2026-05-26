@@ -1,107 +1,75 @@
-# tweetXer – eXterminate your Tweets
+# TweetXer Improved – eXterminate your Tweets
 
-You can use [this script](https://raw.githubusercontent.com/lucahammer/tweetXer/refs/heads/main/tweetXer.js) to delete all your Tweets. Even if they don't show up on your profile. But you need your Data Export for it to work.
-Because this automates the deletion, it may get your account banned. Not a bad outcome.
+An enhanced fork of [Luca Hammer's TweetXer](https://github.com/lucahammer/tweetXer) for deleting **all** of your Tweets (and Likes, DMs, follows) for free using your Twitter/X data export — even Tweets that no longer show up on your profile.
 
-## Translations
+> ⚠️ Because this automates deletion, it may get your account locked or banned. Use at your own risk, and never run a script like this from a source you don't trust.
 
-[Portuguese (Brazil)](https://github.com/arielgmelo/tweetXer-ptbr)
+## What's improved in this fork
 
-## Video tutorial
+- **Redesigned control panel.** A self-contained, dark "glass" panel that matches X's look instead of the old light-blue bar. It's **draggable**, **minimizable**, and **responsive** (works on mobile). All styles are scoped to the panel, so it no longer leaks CSS into the host X page.
+- **Drag-and-drop file picker** with a clear dropzone (click still works too).
+- **Live progress bar** showing percentage, a running **rate** (per second/minute), and an **ETA**.
+- **Auto-pause** — automatically pause for a set duration after every N deletions to avoid rate limits and account locks. Defaults to **15 minutes after every 190 deletions**, both configurable.
+- **Spare by likes** — keep Tweets that have more than a chosen number of likes (requires `tweets.js`, which includes like counts).
+- **Spare recent days** — keep the most recent N days of Tweets. The date is decoded from each Tweet's ID, so it works with any tweet file.
 
-[![Youtube player preview showing a screenrecording: Left half is a firefox with twitter.com open and and open console. Right side is a code editor with bullet points and a person looking at the viewer with animated blue birds flying around their head.](https://img.youtube.com/vi/jB1-z6LbX5w/0.jpg)](https://www.youtube.com/watch?v=jB1-z6LbX5w)
+All the original capabilities (bookmark export, slow delete without a file, unfollow everyone, DM deletion, skip/resume) are still here.
 
-English: [youtube.com/watch?v=jB1-z6LbX5w](https://www.youtube.com/watch?v=jB1-z6LbX5w)
+## Usage
 
-German: [youtube.com/watch?v=HmQ7_ZgVNxg](https://www.youtube.com/watch?v=HmQ7_ZgVNxg)
+0. [Request](https://x.com/settings/your_twitter_data/data) your Data Export (takes several days), download it, and unzip it.
+1. Log into your Twitter/X account in a desktop browser.
+2. Open the browser console (`F12` or `Cmd+Option+I`).
+3. Paste the whole contents of `tweetXer.js` into the console and press Enter.
+   - If your browser blocks pasting, type `allow pasting` and press Enter first.
+4. The TweetXer panel appears at the top of the page.
+5. Drag in (or click to select) your `tweet-headers.js` file from the export.
+6. Wait for your Tweets to vanish. Watch progress, rate, and ETA in the panel.
 
-# Usage
-0.  [Request](https://x.com/settings/your_twitter_data/data) (takes several days) and download your Data Export and unzip it
-1.  Log into your Twitter account
-2.  Open the browser console (F12 or cmd+option+i)
-3.  Paste the [whole script](https://raw.githubusercontent.com/lucahammer/tweetXer/main/tweetXer.js) into the console and press enter
-4.  A light blue bar appears at the top of the window
-5.  Use the file picker to select your tweet-headers.js or tweets.js file
-6.  Wait for all your Tweets to vanish (about 5-10 Tweets per second)
+If the process is interrupted, you can resume: open **Advanced options** and set how many items to **skip**. The script also auto-detects already-deleted Tweets by comparing the file count to your profile count (with a 5% buffer). Enter `1` to force a start from the beginning.
 
-If the process is interrupted at any time, you can use the advanced options to enter how many Tweets have been deleted in the previous run to not start at zero again. The script will try to automatically detect if it was run before by calculating the difference between Tweets in the file and the Tweet count on the profile. If there is a difference it will try to automatically skip that amount (+5% buffer). If you want it to start from the beginning, open 'Advanced options' and enter 1 instead of 0. It will then skip exactly one Tweet and not try to calculate an amount.
+## Advanced options
 
-# Alternative to copy & paste: userscript
+Open **Advanced options** in the panel to configure:
 
-Instead of copy-pasting the script, you can install it as a userscript: [greasyfork.org/en/scripts/476062-tweetxer](https://greasyfork.org/en/scripts/476062-tweetxer) (works with eg. [Violentmonkey](https://addons.mozilla.org/firefox/addon/violentmonkey/), [FireMonkey](https://addons.mozilla.org/firefox/addon/firemonkey/) or [tampermonkey](https://addons.mozilla.org/firefox/addon/tampermonkey/) browser addon)
+| Option | What it does |
+| --- | --- |
+| **Skip the oldest N items** | Skip the first N items (for resuming). Empty = auto-detect. |
+| **Spare tweets with more than N likes** | Keep popular Tweets. Requires `tweets.js`. |
+| **Spare tweets from the last N days** | Keep your most recent Tweets (e.g. last 30 days). |
+| **Pause after every N deletions** | Auto-pause cadence. Default `190`. Set `0` to disable. |
+| **Pause duration (minutes)** | How long each auto-pause lasts. Default `15`. |
+| **Export bookmarks** | Export bookmarks (not included in the official data export). |
+| **Slow delete without file** | Delete directly from your profile if you have no export (much slower). |
+| **Unfollow everyone** | Unfollow every account you follow. |
 
-The userscript works on smartphones as well.
+## Supported files
 
-## Android
+- `tweet-headers.js` — delete Tweets (≈10,000–20,000 / hour)
+- `tweets.js` — delete Tweets **and** enables the "spare by likes" filter
+- `direct-message-headers.js` and `direct-message-group-headers.js` — delete DMs (≈800 / 15 min)
+- `like.js` — remove Likes (≈500 / 15 min; only the most recent few thousand)
 
-1. Install [Firefox Mobile](https://www.mozilla.org/firefox/browsers/mobile/)
-2. Install the [Tampermonkey addon](https://addons.mozilla.org/firefox/addon/tampermonkey/)
-3. Install the [script from greasyfork](https://greasyfork.org/en/scripts/476062-tweetxer)
-4. Open X com and the blue bar should show up. You may need to uninstall the X-App before.
+## Alternative: userscript
 
-[Video tutorial for Android](https://www.youtube.com/watch?v=Z-MeTaRq6xM)
+Instead of pasting into the console, you can run `tweetXer.js` as a userscript with [Violentmonkey](https://addons.mozilla.org/firefox/addon/violentmonkey/), [FireMonkey](https://addons.mozilla.org/firefox/addon/firemonkey/), or [Tampermonkey](https://addons.mozilla.org/firefox/addon/tampermonkey/). This also works on mobile (Firefox + Tampermonkey on Android, or the Userscripts Safari extension on iOS).
 
-## iOS (iPhone/iPad)
+## How it works
 
-1. Install the safari extension [Userscripts](https://apps.apple.com/app/userscripts/id1463298887)
-2. Enable userscripts in Safari
-3. Add the TweetXer userscript: New remote https://update.greasyfork.org/scripts/476062/TweetXer.user.js
-4. Visit X com
-5. Allow the extension Userscripts to access X com
+The script intercepts your browser's requests to X and swaps in Tweet IDs from your data export, which lets it reach and delete old Tweets that aren't visible on your profile.
 
-# How it works
+- XHR interception inspired by [ttodua/Tamper-Request-Javascript-Tool](https://github.com/ttodua/Tamper-Request-Javascript-Tool)
+- Faster deletion inspired by [Lyfhael/DeleteTweets](https://github.com/Lyfhael/DeleteTweets)
 
-Never use something like this from an untrusted source. The script intercepts requests from your browser to Twitter and replaces the Tweet-IDs
-with IDs from your tweets.js file. This allows it to access the old Tweets and delete them.
+## Known issues
 
-XHR interception inspired by [github.com/ttodua/Tamper-Request-Javascript-Tool](https://github.com/ttodua/Tamper-Request-Javascript-Tool)
+- **Not all Tweets removed.** The script can only delete IDs present in your file. Re-run, or request a fresh export. Remaining "ghost" Tweets are often Retweets of accounts that were deactivated/banned.
+- **Likes aren't fully removed.** X only allows unliking the most recent few hundred.
+- **Browser crashes** are more common in Chrome, especially past ~15k Tweets. Closing the console while it runs helps.
+- **Profile count still shows Tweets but none are visible.** Usually Retweets of banned/deactivated accounts — nothing you can do.
 
-Faster deletion inspired by [github.com/Lyfhael/DeleteTweets](https://github.com/Lyfhael/DeleteTweets)
+## Credits & license
 
-# Bonus: Export your bookmarks
+Original project by **Luca Hammer** and contributors (Luca, dbort, pReya, Micolithe, STrRedWolf). Licensed under the **NoHarm (draft)** license, inherited from the upstream project. This fork keeps the same license and credits.
 
-Because bookmarks aren't included in the Twitter data export, there is a button under "Advanced options" to export them.
-
-# Bonus: Tweet deletion without data export
-
-If for some reason you can't use your data export or it missed some Tweets, you can use slow mode under "Advanced options". Be warned, it is very slow because it has to load the Tweets on your profile first to delete them and there are various request limits for that.
-
-# Bonus: Delete Direct Messages
-
-To delete DMs, you select the direct-message-header.js file instead of the tweet-headers.js file. Once it's done, reload the page, paste TweetXer into the console again and select the direct-message-group-headers.js file to remove message groups. If the process gets interrupted for whatever reason, you can enter how many messages where deleted before under "Advanced options" before selcting the file.
-
-[According to former engineers](https://bsky.app/profile/triketora.com/post/3lcbmqzo4uk25), DMs are removed from the server if all sides remove them from their inbox.
-
-# Bonus: Unfollow everyone
-
-Under "Advanced options" you can automatically unfollow everyone. You may need to rerun with some time in between because of rate limits.
-
-# Known issues and solutions
-
-- I can't paste the script.
-
-  Your browser tries to protect you from pasting some random script you found. Type "allow pasting" (Firefox) or "allow pasting" (Chrome) and hit enter to confirm that you know what you are doing.
-
-- X Corp doesn't send me my data export.
-
-Try requesting it through their [Privacy Form](https://help.x.com/en/forms/privacy/request-account-info/me).
-
-- Not all Tweets got removed.
-
-Check if the ID of the remaining Tweet is in your data export. The script can only remove what's in the file. There is a option to automatically remove remaining Tweets under "Advanced options" but it is very slow. If there are many Tweets, re-run the script. Maybe request a new export.
-
-- No Tweets are visible on the profile, but Tweet count shows there are still Tweets left.
-
-In most cases those are Retweets from Tweets from accounts that got deactivated or banned. Sometimes the Tweets reappear once the accounts come back, sometimes they don't. There is nothing you can do.
-
-- Likes aren't removed.
-
-Only the last few hundred can be be removed. Even by hand. There is nothing you can do other than deleting your whole account. Or reliking Tweets to unlike them afterwards which will probably get your account locked for spamming.
-
-- Browser crashes
-
-  This happens more often with Chrome and Chrome-based browsers. Especially when removing more than 15 k Tweets. Closing the browser console while it runs seems to reduce the crashes.
-
-- It worked and you are thankful.
-
-Awesome. Share the script on whatever platform you are using now to give others the option to delete their Tweets. Support me to keep creating things like this: [buymeacoffee.com/lucahammer](https://www.buymeacoffee.com/lucahammer)
+Support the original author: [buymeacoffee.com/lucahammer](https://www.buymeacoffee.com/lucahammer)

@@ -43,6 +43,10 @@
         authorization: 'Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA',
         ct0: false,
         transaction_id: '',
+        startTime: 0,
+        startCount: 0,
+        pauseEvery: 190,
+        pauseMinutes: 15,
 
         async init() {
             this.baseUrl = `https://${window.location.hostname}`
@@ -76,19 +80,122 @@
             document.getElementById("info").textContent = text
         },
 
-        createProgressBar() {
-            const progressbar = document.createElement("progress")
-            progressbar.id = "progressbar"
-            progressbar.value = this.dCount
-            progressbar.max = this.total
-            progressbar.style = 'width:100%'
+        formatDuration(s) {
+            if (!isFinite(s) || s <= 0) return '—'
+            s = Math.round(s)
+            const h = Math.floor(s / 3600)
+            const m = Math.floor((s % 3600) / 60)
+            const sec = s % 60
+            if (h) return `${h}h ${m}m`
+            if (m) return `${m}m ${sec}s`
+            return `${sec}s`
+        },
 
-            document.getElementById(this.dId).appendChild(progressbar)
+        readSettings() {
+            const every = parseInt(document.getElementById('pauseEvery')?.value, 10)
+            this.pauseEvery = isNaN(every) ? 190 : every
+            const mins = parseFloat(document.getElementById('pauseMinutes')?.value)
+            this.pauseMinutes = isNaN(mins) ? 15 : mins
+        },
+
+        // Keep tweets with more than the chosen number of likes.
+        // Like counts are only present in tweets.js, not in tweet-headers.js.
+        filterByLikes(entries) {
+            const spareLikes = parseInt(document.getElementById('spareLikes')?.value, 10) || 0
+            if (spareLikes <= 0) return entries
+            if (!entries.length || entries[0].tweet.favorite_count === undefined) {
+                this.updateInfo('This file has no like counts. Use tweets.js to spare tweets by likes.')
+                console.warn('favorite_count not found. Like-based sparing requires tweets.js.')
+                return entries
+            }
+            const before = entries.length
+            const kept = entries.filter((x) => !(parseInt(x.tweet.favorite_count, 10) > spareLikes))
+            console.log(`Sparing ${before - kept.length} tweet(s) with more than ${spareLikes} likes.`)
+            return kept
+        },
+
+        // Spare the most recent N days of tweets. The creation time is decoded
+        // from the tweet's Snowflake ID, so this works for any tweet file.
+        filterByDays(ids) {
+            const days = parseInt(document.getElementById('skipDays')?.value, 10) || 0
+            if (days <= 0) return ids
+            const cutoff = Date.now() - days * 86400000
+            const epoch = 1288834974657n // Twitter Snowflake epoch (2010-11-04)
+            const before = ids.length
+            const kept = ids.filter((id) => {
+                try {
+                    return Number((BigInt(id) >> 22n) + epoch) < cutoff
+                } catch (_) {
+                    return true
+                }
+            })
+            console.log(`Sparing ${before - kept.length} tweet(s) from the last ${days} day(s).`)
+            return kept
+        },
+
+        // Pause for pauseMinutes after every pauseEvery deletions in this run.
+        async maybePause() {
+            if (!this.pauseEvery || this.pauseEvery <= 0) return
+            const done = this.dCount - this.startCount
+            if (done <= 0 || done % this.pauseEvery !== 0) return
+            const titleEl = document.getElementById('tweetsXer_title')
+            const prevTitle = titleEl ? titleEl.textContent : ''
+            this.updateTitle('TweetXer: Paused')
+            let remaining = Math.round(this.pauseMinutes * 60)
+            while (remaining > 0) {
+                this.updateInfo(`Pausing ${this.formatDuration(remaining)} after ${done.toLocaleString()} deletions to avoid rate limits…`)
+                await this.sleep(1000)
+                remaining--
+            }
+            this.updateTitle(prevTitle)
+        },
+
+        createProgressBar() {
+            const drop = document.getElementById('tx-drop')
+            if (drop) drop.remove()
+
+            this.startTime = Date.now()
+            this.startCount = this.dCount
+
+            const area = document.getElementById('tx-progress-area') || document.getElementById(this.dId)
+            if (document.getElementById('progressbar')) document.getElementById('progressbar').remove()
+
+            const wrap = document.createElement('div')
+            wrap.id = 'progressbar'
+            wrap.className = 'tx-progress'
+            wrap.innerHTML = `
+                <div class="tx-progress-head"><span>Progress</span><span class="tx-pct">0%</span></div>
+                <div class="tx-track"><div class="tx-fill"></div></div>
+                <div class="tx-stats">
+                    <span class="tx-stat-count">0 / 0</span>
+                    <span class="tx-stat-rate">—</span>
+                    <span class="tx-stat-eta">ETA —</span>
+                </div>`
+            area.appendChild(wrap)
+            this.updateProgressBar()
         },
 
         updateProgressBar() {
-            document.getElementById('progressbar').value = this.dCount
-            this.updateInfo(`${this.dCount} deleted. ${this.tId}`)
+            const pb = document.getElementById('progressbar')
+            if (!pb) return
+
+            const total = this.total || 0
+            const pct = total > 0 ? Math.min(100, (this.dCount / total) * 100) : 0
+            pb.querySelector('.tx-fill').style.width = `${pct}%`
+            pb.querySelector('.tx-pct').textContent = `${pct >= 100 ? '100' : pct.toFixed(1)}%`
+            pb.querySelector('.tx-stat-count').textContent = `${this.dCount.toLocaleString()} / ${total.toLocaleString()}`
+
+            const elapsed = (Date.now() - this.startTime) / 1000
+            const done = this.dCount - this.startCount
+            const rate = (done > 0 && elapsed > 0) ? done / elapsed : 0
+            pb.querySelector('.tx-stat-rate').textContent = rate <= 0
+                ? '—'
+                : (rate >= 1 ? `${rate.toFixed(1)}/s` : `${(rate * 60).toFixed(0)}/min`)
+
+            const remaining = Math.max(0, total - this.dCount)
+            pb.querySelector('.tx-stat-eta').textContent = `ETA ${rate > 0 ? this.formatDuration(remaining / rate) : '—'}`
+
+            this.updateInfo(`Working… most recent ID: ${this.tId || '—'}`)
         },
 
         processFile() {
@@ -107,11 +214,11 @@
                     if (filestart.includes('.tweet_headers.')) {
                         console.log('File contains Tweets.')
                         TweetsXer.action = 'untweet'
-                        TweetsXer.tIds = json.map((x) => x.tweet.tweet_id)
+                        TweetsXer.tIds = TweetsXer.filterByDays(TweetsXer.filterByLikes(json).map((x) => x.tweet.tweet_id))
                     } else if (filestart.includes('.tweets.') || filestart.includes('.tweet.')) {
                         console.log('File contains Tweets.')
                         TweetsXer.action = 'untweet'
-                        TweetsXer.tIds = json.map((x) => x.tweet.id_str)
+                        TweetsXer.tIds = TweetsXer.filterByDays(TweetsXer.filterByLikes(json).map((x) => x.tweet.id_str))
                     } else if (filestart.includes('.like.')) {
                         console.log('File contains Favs.')
                         TweetsXer.action = 'unfav'
@@ -139,6 +246,7 @@
                     }
 
                     if (TweetsXer.action.length > 0) {
+                        TweetsXer.readSettings()
                         TweetsXer.total = TweetsXer.tIds.length
                         document.getElementById(`${TweetsXer.dId}_file`).remove()
                         TweetsXer.createProgressBar()
@@ -197,60 +305,209 @@
         },
 
         createUploadForm() {
-            const h2Class = document.querySelectorAll("h2")[1]?.getAttribute("class") || ""
+            const dId = this.dId
+            if (document.getElementById(dId)) { document.getElementById(dId).remove() }
             const div = document.createElement("div")
-            div.id = this.dId
-            if (document.getElementById(this.dId)) { document.getElementById(this.dId).remove() }
+            div.id = dId
             div.innerHTML = `
-            <style>#${this.dId}{ z-index:99999; position: sticky; top:0px; left:0px; width:auto; margin:0 auto; padding: 20px 10%; background:#87CEFA; opacity:0.95; } #${this.dId} > *{padding:5px;} button{background-color:#eff3f4;border-radius:666px;padding:2px 10px;} a {color:blue;}</style>
-            <div style="color:black">
-                <h2 class="${h2Class}" id="tweetsXer_title">TweetXer</h2>
-                <p id="info">Please wait for your profile to load. If this message doesn't go away after some seconds, something isn't working.</p>
-                <p id="start">
-                    <input type="file" value="" id="${this.dId}_file"  />
-                    <a href="#" id="toggleAdvanced">Advanced Options</a>
-                <div id="advanced" style="display:none">
-                    <label for="skipCount">Enter how many Tweets to skip before selecting a file.</label>
-                    <input id="skipCount" type="number" value="" />
-                    <p>Supported files:
-                    <ul>
-                        <li>tweet-headers.js to delete Tweets (10.000 - 20.000 per hour)</li>
-                        <li>direct-message-header.js and direct-message-group-headers.js to delete DMs (around 800 per 15 minutes)</li>
-                        <li>like.js to delete Favs (500 per 15 minutes; only works for the most recent few thousands)</li>
-                    </ul>
-                    <p><strong>Export bookmarks</strong><br>
-                        Bookmarks are not included in the official data export. You can export them here.
-                        <button id="exportBookmarks" type="button">Export Bookmarks</button>
-                    </p>
-                    <p><strong>No tweet-headers.js?</strong><br>
-                        If you are unable to get your data export, you can use the following option.<br>
-                        This option is much slower and less reliable. It can remove at most 4000 Tweets per hour.<br>
-                        <button id="slowDelete" type="button">Slow delete without file</button>
-                    </p>
-                    <p><strong>Unfollow everyone</strong><br>
-                        It's time to let go. This will unfollow everyone you follow.<br>
-                        <button id="unfollowEveryone" type="button">Unfollow everyone</button>
-                    </p>
-                    <p><a id="removeTweetXer" href="#">Remove TweetXer</a></p>
-                    <p><small>${TweetsXer.version}</small></p>
+            <style>
+            #${dId},#${dId} *{box-sizing:border-box}
+            #${dId}{
+                --tx-accent:#1d9bf0;--tx-danger:#f4212e;
+                --tx-text:#e7e9ea;--tx-muted:#71767b;--tx-card:rgba(255,255,255,.05);--tx-border:rgba(255,255,255,.12);
+                position:fixed;top:16px;left:50%;transform:translateX(-50%);
+                width:min(460px,calc(100vw - 24px));max-height:calc(100vh - 32px);overflow-y:auto;
+                z-index:2147483647;margin:0;padding:0;
+                background:rgba(21,24,28,.94);backdrop-filter:blur(14px) saturate(150%);-webkit-backdrop-filter:blur(14px) saturate(150%);
+                color:var(--tx-text);font-family:"TwitterChirp",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+                font-size:15px;line-height:1.45;text-align:left;
+                border:1px solid var(--tx-border);border-radius:20px;box-shadow:0 18px 50px rgba(0,0,0,.55);
+                -webkit-font-smoothing:antialiased;animation:tx-in .25s ease both;
+                scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.25) transparent;
+            }
+            @keyframes tx-in{from{opacity:0;transform:translateX(-50%) translateY(-14px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
+            #${dId}::-webkit-scrollbar{width:8px}
+            #${dId}::-webkit-scrollbar-thumb{background:rgba(255,255,255,.2);border-radius:8px}
+            #${dId} .tx-header{display:flex;align-items:center;gap:12px;padding:14px 16px;position:sticky;top:0;z-index:2;cursor:grab;user-select:none;background:rgba(21,24,28,.85);backdrop-filter:blur(14px);border-bottom:1px solid var(--tx-border)}
+            #${dId} .tx-header:active{cursor:grabbing}
+            #${dId} .tx-badge{flex:0 0 auto;width:38px;height:38px;border-radius:12px;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,var(--tx-danger),#ff5b66);color:#fff;box-shadow:0 4px 12px rgba(244,33,46,.4)}
+            #${dId} .tx-htext{flex:1 1 auto;min-width:0}
+            #${dId} #tweetsXer_title{margin:0;font-size:17px;font-weight:800;letter-spacing:-.2px;color:var(--tx-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+            #${dId} .tx-sub{font-size:12px;color:var(--tx-muted);font-weight:500}
+            #${dId} .tx-iconbtn{flex:0 0 auto;width:32px;height:32px;border-radius:50%;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--tx-muted);background:transparent;transition:.15s}
+            #${dId} .tx-iconbtn:hover{background:rgba(255,255,255,.1);color:var(--tx-text)}
+            #${dId} #removeTweetXer:hover{background:rgba(244,33,46,.15);color:var(--tx-danger)}
+            #${dId} .tx-body{padding:16px}
+            #${dId}.tx-min{width:min(320px,calc(100vw - 24px))}
+            #${dId}.tx-min .tx-body{display:none}
+            #${dId} #info{margin:0 0 14px;font-size:14px;color:var(--tx-muted)}
+            #${dId} #tx-drop{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:24px 16px;border:2px dashed var(--tx-border);border-radius:16px;cursor:pointer;text-align:center;transition:.15s;color:var(--tx-muted);background:var(--tx-card)}
+            #${dId} #tx-drop:hover,#${dId} #tx-drop.tx-dragover{border-color:var(--tx-accent);color:var(--tx-text);background:rgba(29,155,240,.08)}
+            #${dId} #tx-drop .tx-drop-icon{color:var(--tx-accent)}
+            #${dId} #tx-drop strong{color:var(--tx-text);font-weight:700;font-size:15px}
+            #${dId} #tx-drop span{font-size:13px;line-height:1.5}
+            #${dId} #${dId}_file{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;clip:rect(0 0 0 0)}
+            #${dId} .tx-adv-toggle{width:100%;margin-top:12px;display:flex;align-items:center;justify-content:center;gap:6px;background:transparent;border:none;color:var(--tx-muted);font-size:14px;font-weight:600;cursor:pointer;padding:8px;border-radius:10px;font-family:inherit}
+            #${dId} .tx-adv-toggle:hover{color:var(--tx-text);background:rgba(255,255,255,.05)}
+            #${dId} .tx-chevron{transition:transform .2s}
+            #${dId} .tx-adv-toggle.tx-open .tx-chevron{transform:rotate(180deg)}
+            #${dId} #advanced{max-height:0;overflow:hidden;transition:max-height .3s ease}
+            #${dId} #advanced.tx-open{max-height:2200px;margin-top:8px}
+            #${dId} .tx-section{background:var(--tx-card);border:1px solid var(--tx-border);border-radius:14px;padding:14px;margin-bottom:10px}
+            #${dId} .tx-section h4{margin:0 0 4px;font-size:14px;font-weight:700;color:var(--tx-text)}
+            #${dId} .tx-section p{margin:0 0 10px;font-size:13px;color:var(--tx-muted)}
+            #${dId} .tx-section ul{margin:6px 0 0;padding-left:18px;font-size:13px;color:var(--tx-muted)}
+            #${dId} .tx-section li{margin:3px 0}
+            #${dId} .tx-label{display:block;font-size:13px;color:var(--tx-muted);margin-bottom:6px}
+            #${dId} .tx-input{width:100%;padding:9px 12px;border-radius:10px;border:1px solid var(--tx-border);background:rgba(0,0,0,.25);color:var(--tx-text);font-size:14px;font-family:inherit;outline:none;transition:.15s}
+            #${dId} .tx-input:focus{border-color:var(--tx-accent);box-shadow:0 0 0 3px rgba(29,155,240,.25)}
+            #${dId} .tx-input+.tx-label{margin-top:12px}
+            #${dId} .tx-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;width:100%;padding:9px 16px;border-radius:999px;border:1px solid transparent;cursor:pointer;font-size:14px;font-weight:700;font-family:inherit;transition:.15s}
+            #${dId} .tx-btn-ghost{background:transparent;border-color:var(--tx-border);color:var(--tx-text)}
+            #${dId} .tx-btn-ghost:hover{background:rgba(255,255,255,.08)}
+            #${dId} .tx-btn-danger{background:transparent;border-color:rgba(244,33,46,.5);color:var(--tx-danger)}
+            #${dId} .tx-btn-danger:hover{background:rgba(244,33,46,.12)}
+            #${dId} a{color:var(--tx-accent);text-decoration:none}
+            #${dId} a:hover{text-decoration:underline}
+            #${dId} #bookmarksDownload{display:inline-block;margin-top:10px;font-weight:700}
+            #${dId} .tx-progress{margin-top:14px}
+            #${dId} .tx-progress-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
+            #${dId} .tx-progress-head span:first-child{font-size:13px;color:var(--tx-muted);font-weight:600}
+            #${dId} .tx-pct{font-size:18px;font-weight:800;color:var(--tx-accent)}
+            #${dId} .tx-track{height:10px;border-radius:999px;background:rgba(255,255,255,.1);overflow:hidden}
+            #${dId} .tx-fill{height:100%;width:0;border-radius:999px;background:linear-gradient(90deg,var(--tx-accent),#5cc0ff);transition:width .3s ease}
+            #${dId} .tx-stats{display:flex;justify-content:space-between;gap:8px;margin-top:8px;font-size:12px;color:var(--tx-muted);font-variant-numeric:tabular-nums}
+            #${dId} .tx-foot{margin-top:14px;text-align:center;font-size:11px;color:var(--tx-muted)}
+            @media (max-width:480px){#${dId}{top:8px;width:calc(100vw - 16px);border-radius:16px}}
+            </style>
+            <div class="tx-header" id="tx-header">
+                <div class="tx-badge"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M10 11v6M14 11v6"/></svg></div>
+                <div class="tx-htext">
+                    <h2 id="tweetsXer_title">TweetXer</h2>
+                    <div class="tx-sub">eXterminate your tweets</div>
+                </div>
+                <button class="tx-iconbtn" id="tx-min" type="button" title="Minimize"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/></svg></button>
+                <button class="tx-iconbtn" id="removeTweetXer" type="button" title="Close"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+            </div>
+            <div class="tx-body">
+                <p id="info">Please wait for your profile to load. If this message doesn't go away after a few seconds, something isn't working.</p>
+                <div id="start">
+                    <label id="tx-drop" for="${dId}_file">
+                        <div class="tx-drop-icon"><svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4m0 0l-4 4m4-4l4 4"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg></div>
+                        <strong>Choose your data file</strong>
+                        <span>Drag &amp; drop or click to select<br>tweet-headers.js · like.js · direct-message-headers.js</span>
+                    </label>
+                    <input type="file" value="" id="${dId}_file" />
+                    <button type="button" class="tx-adv-toggle" id="toggleAdvanced"><svg class="tx-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg> Advanced options</button>
+                </div>
+                <div id="tx-progress-area"></div>
+                <div id="advanced">
+                    <div class="tx-section">
+                        <h4>Filters</h4>
+                        <label class="tx-label" for="skipCount">Skip the oldest N items (empty = auto-detect)</label>
+                        <input id="skipCount" type="number" class="tx-input" value="" placeholder="0" />
+                        <label class="tx-label" for="spareLikes">Spare tweets with more than N likes (needs tweets.js)</label>
+                        <input id="spareLikes" type="number" class="tx-input" value="" placeholder="e.g. 100" />
+                        <label class="tx-label" for="skipDays">Spare tweets from the last N days</label>
+                        <input id="skipDays" type="number" class="tx-input" value="" placeholder="e.g. 30" />
+                    </div>
+                    <div class="tx-section">
+                        <h4>Auto-pause</h4>
+                        <p>Pause periodically to dodge rate limits and account locks.</p>
+                        <label class="tx-label" for="pauseEvery">Pause after every N deletions</label>
+                        <input id="pauseEvery" type="number" class="tx-input" value="190" />
+                        <label class="tx-label" for="pauseMinutes">Pause duration (minutes)</label>
+                        <input id="pauseMinutes" type="number" class="tx-input" value="15" />
+                    </div>
+                    <div class="tx-section">
+                        <h4>Supported files</h4>
+                        <ul>
+                            <li><strong>tweet-headers.js</strong> — delete Tweets (10k–20k / hour)</li>
+                            <li><strong>direct-message-headers.js</strong> &amp; <strong>direct-message-group-headers.js</strong> — delete DMs (~800 / 15 min)</li>
+                            <li><strong>like.js</strong> — remove Likes (500 / 15 min, recent only)</li>
+                        </ul>
+                    </div>
+                    <div class="tx-section">
+                        <h4>Export bookmarks</h4>
+                        <p>Bookmarks aren't included in the official data export. You can export them here.</p>
+                        <button id="exportBookmarks" type="button" class="tx-btn tx-btn-ghost">Export bookmarks</button>
+                    </div>
+                    <div class="tx-section">
+                        <h4>No tweet-headers.js?</h4>
+                        <p>If you can't get your data export, delete directly from your profile. Much slower and less reliable — at most ~4000 Tweets / hour.</p>
+                        <button id="slowDelete" type="button" class="tx-btn tx-btn-ghost">Slow delete without file</button>
+                    </div>
+                    <div class="tx-section">
+                        <h4>Unfollow everyone</h4>
+                        <p>It's time to let go. This will unfollow everyone you follow.</p>
+                        <button id="unfollowEveryone" type="button" class="tx-btn tx-btn-danger">Unfollow everyone</button>
+                    </div>
+                    <div class="tx-foot">TweetXer v${this.version}</div>
                 </div>
             </div>
                 `
             document.body.insertBefore(div, document.body.firstChild)
-            document.getElementById("toggleAdvanced").addEventListener("click", (() => {
-                const adv = document.getElementById('advanced')
-                if (adv.style.display == 'none') {
-                    adv.style.display = 'block'
-                } else {
-                    adv.style.display = 'none'
-                }
-            }))
-            document.getElementById(`${this.dId}_file`).addEventListener("change", this.processFile, false)
+
+            document.getElementById("toggleAdvanced").addEventListener("click", () => {
+                document.getElementById('advanced').classList.toggle('tx-open')
+                document.getElementById('toggleAdvanced').classList.toggle('tx-open')
+            })
+            document.getElementById("tx-min").addEventListener("click", () => {
+                document.getElementById(dId).classList.toggle('tx-min')
+            })
+            document.getElementById(`${dId}_file`).addEventListener("change", this.processFile, false)
             document.getElementById("exportBookmarks").addEventListener("click", this.exportBookmarks, false)
             document.getElementById("slowDelete").addEventListener("click", this.slowDelete, false)
             document.getElementById("unfollowEveryone").addEventListener("click", this.unfollow, false)
             document.getElementById("removeTweetXer").addEventListener("click", this.removeTweetXer, false)
 
+            // Drag & drop file support
+            const drop = document.getElementById('tx-drop')
+            const fileInput = document.getElementById(`${dId}_file`)
+            ;['dragenter', 'dragover'].forEach((ev) => drop.addEventListener(ev, (e) => {
+                e.preventDefault(); e.stopPropagation(); drop.classList.add('tx-dragover')
+            }))
+            ;['dragleave', 'drop'].forEach((ev) => drop.addEventListener(ev, (e) => {
+                e.preventDefault(); e.stopPropagation(); drop.classList.remove('tx-dragover')
+            }))
+            drop.addEventListener('drop', (e) => {
+                if (e.dataTransfer.files && e.dataTransfer.files.length) {
+                    fileInput.files = e.dataTransfer.files
+                    fileInput.dispatchEvent(new Event('change'))
+                }
+            })
+
+            // Draggable panel via the header
+            const panel = document.getElementById(dId)
+            const header = document.getElementById('tx-header')
+            let dragging = false, offX = 0, offY = 0
+            header.addEventListener('pointerdown', (e) => {
+                if (e.target.closest('.tx-iconbtn')) return
+                dragging = true
+                const r = panel.getBoundingClientRect()
+                panel.style.transform = 'none'
+                panel.style.left = `${r.left}px`
+                panel.style.top = `${r.top}px`
+                panel.style.right = 'auto'
+                offX = e.clientX - r.left
+                offY = e.clientY - r.top
+                header.setPointerCapture(e.pointerId)
+            })
+            header.addEventListener('pointermove', (e) => {
+                if (!dragging) return
+                const w = panel.offsetWidth, h = panel.offsetHeight
+                const nx = Math.max(6, Math.min(window.innerWidth - w - 6, e.clientX - offX))
+                const ny = Math.max(6, Math.min(window.innerHeight - h - 6, e.clientY - offY))
+                panel.style.left = `${nx}px`
+                panel.style.top = `${ny}px`
+            })
+            const endDrag = (e) => {
+                if (!dragging) return
+                dragging = false
+                try { header.releasePointerCapture(e.pointerId) } catch (_) { }
+            }
+            header.addEventListener('pointerup', endDrag)
+            header.addEventListener('pointercancel', endDrag)
         },
 
         async exportBookmarks() {
@@ -351,6 +608,7 @@
                     if (response.status == 200) {
                         TweetsXer.dCount++
                         TweetsXer.updateProgressBar()
+                        await TweetsXer.maybePause()
 
                         if (response.headers.get('x-rate-limit-remaining') != null && response.headers.get('x-rate-limit-remaining') < 1) {
                             console.log('rate limit hit')
@@ -456,6 +714,7 @@
                 if (response.status == 204) {
                     TweetsXer.dCount++
                     TweetsXer.updateProgressBar()
+                    await TweetsXer.maybePause()
 
                     if (response.headers.get('x-rate-limit-remaining') != null && response.headers.get('x-rate-limit-remaining') < 1) {
                         console.log('rate limit hit')
@@ -557,6 +816,7 @@
 
         async slowDelete() {
             //document.getElementById("toggleAdvanced").click()
+            TweetsXer.readSettings()
             document.getElementById('start').remove()
             TweetsXer.total = TweetsXer.TweetCount
             TweetsXer.createProgressBar()
@@ -614,6 +874,7 @@
 
                     TweetsXer.dCount++
                     TweetsXer.updateProgressBar()
+                    await TweetsXer.maybePause()
                     consecutiveErrors = 0
 
                     // print to the console how many Tweets already got deleted
