@@ -60,7 +60,7 @@
             this.createUploadForm()
             await this.getTweetCount()
             this.ct0 = this.getCookie('ct0')
-            this.username = document.location.href.split('/')[3].replace('#', '')
+            this.username = this.getUsernameFromUI()
         },
 
         sleep(ms) {
@@ -70,6 +70,20 @@
         getCookie(name) {
             const match = `; ${document.cookie}`.match(`;\\s*${name}=([^;]+)`)
             return match ? match[1] : null
+        },
+
+        // Read the logged-in account handle from the UI, falling back to the URL.
+        getUsernameFromUI() {
+            const sources = [
+                '[data-testid="SideNav_AccountSwitcher_Button"]',
+                '[data-testid="UserName"]'
+            ]
+            for (const sel of sources) {
+                const el = document.querySelector(sel)
+                const match = el && el.textContent.match(/@(\w+)/)
+                if (match) return match[1]
+            }
+            return (document.location.href.split('/')[3] || '').replace('#', '')
         },
 
         updateTransactionId() {
@@ -536,11 +550,6 @@
                         <p>If you can't get your data export, delete directly from your profile. Much slower and less reliable — at most ~4000 Tweets / hour.</p>
                         <button id="slowDelete" type="button" class="tx-btn tx-btn-ghost">Slow delete without file</button>
                     </div>
-                    <div class="tx-section">
-                        <h4>Unfollow everyone</h4>
-                        <p>It's time to let go. This will unfollow everyone you follow.</p>
-                        <button id="unfollowEveryone" type="button" class="tx-btn tx-btn-danger">Unfollow everyone</button>
-                    </div>
                     <div class="tx-foot">TweetXer v${this.version}</div>
                 </div>
             </div>
@@ -557,7 +566,6 @@
             document.getElementById(`${dId}_file`).addEventListener("change", this.processFile, false)
             document.getElementById("exportBookmarks").addEventListener("click", this.exportBookmarks, false)
             document.getElementById("slowDelete").addEventListener("click", this.slowDelete, false)
-            document.getElementById("unfollowEveryone").addEventListener("click", this.unfollow, false)
             document.getElementById("removeTweetXer").addEventListener("click", this.removeTweetXer, false)
 
             // Drag & drop file support
@@ -923,6 +931,13 @@
             console.log("Reopen the console if there are issues to see if an error shows up.")
         },
 
+        // Read a rendered tweet's author handle from its UI.
+        tweetAuthorHandle(tweetEl) {
+            const nameEl = tweetEl.querySelector('[data-testid="User-Name"]')
+            const match = nameEl && nameEl.textContent.match(/@(\w+)/)
+            return match ? match[1].toLowerCase() : null
+        },
+
         // Read a rendered tweet's like count straight from its UI (no API request).
         likesFromTweetElement(tweetEl) {
             const group = tweetEl.querySelector('[role="group"][aria-label]')
@@ -960,20 +975,30 @@
                 document.querySelectorAll('section [data-testid="cellInnerDiv"]>div>div>div').forEach(x => x.remove())
                 document.querySelectorAll('section [data-testid="cellInnerDiv"]>div>div>[role="link"]').forEach(x => x.remove())
 
+                // Resolve the current tweet element once.
+                const caretEl = document.querySelector(more)
+                const tweetEl = caretEl ? caretEl.closest('[data-testid="tweet"]') : document.querySelector('[data-testid="tweet"]')
+
+                // Skip tweets that aren't ours (e.g. others' replies in a thread) without touching them.
+                if (tweetEl && TweetsXer.username) {
+                    const author = TweetsXer.tweetAuthorHandle(tweetEl)
+                    if (author && author !== TweetsXer.username.toLowerCase()) {
+                        tweetEl.remove()
+                        console.log(`Skipped @${author}'s tweet (not your account).`)
+                        continue
+                    }
+                }
+
                 // Spare popular tweets by reading the like count from the UI (no API call)
-                if (TweetsXer.spareThreshold > 0) {
-                    const caretEl = document.querySelector(more)
-                    const tweetEl = caretEl ? caretEl.closest('[data-testid="tweet"]') : document.querySelector('[data-testid="tweet"]')
-                    if (tweetEl) {
-                        const likes = TweetsXer.likesFromTweetElement(tweetEl)
-                        if (likes > TweetsXer.spareThreshold) {
-                            TweetsXer.sparedCount++
-                            if (TweetsXer.total > 0) TweetsXer.total--
-                            tweetEl.remove()
-                            console.log(`Spared a tweet (${likes} likes). ${TweetsXer.sparedCount} spared so far.`)
-                            TweetsXer.updateProgressBar()
-                            continue
-                        }
+                if (tweetEl && TweetsXer.spareThreshold > 0) {
+                    const likes = TweetsXer.likesFromTweetElement(tweetEl)
+                    if (likes > TweetsXer.spareThreshold) {
+                        TweetsXer.sparedCount++
+                        if (TweetsXer.total > 0) TweetsXer.total--
+                        tweetEl.remove()
+                        console.log(`Spared a tweet (${likes} likes). ${TweetsXer.sparedCount} spared so far.`)
+                        TweetsXer.updateProgressBar()
+                        continue
                     }
                 }
 
@@ -1034,32 +1059,6 @@
             console.log(`Finished. Total deleted: ${TweetsXer.dCount} Tweets. Please reload to confirm.`)
         },
 
-        async unfollow() {
-            //document.getElementById("toggleAdvanced").click()
-            let unfollowCount = 0
-            let next_unfollow, menu
-
-            document.querySelector('[href$="/following"]').click()
-            await TweetsXer.sleep(1200)
-
-            const accounts = '[data-testid="UserCell"]'
-            while (document.querySelectorAll('[data-testid="UserCell"] [data-testid$="-unfollow"]').length > 0) {
-                next_unfollow = document.querySelectorAll(accounts)[0]
-                next_unfollow.scrollIntoView({
-                    'behavior': 'smooth'
-                })
-
-                next_unfollow.querySelector('[data-testid$="-unfollow"]').click()
-                menu = await waitForElemToExist('[data-testid="confirmationSheetConfirm"]')
-                menu.click()
-                next_unfollow.remove()
-                unfollowCount++
-                if (unfollowCount % 10 == 0) console.log(`${new Date().toUTCString()} Unfollowed ${unfollowCount} accounts`)
-                await TweetsXer.sleep(Math.floor(Math.random() * 200))
-            }
-
-            console.log('No accounts left. Please reload to confirm.')
-        },
         removeTweetXer() {
             document.getElementById('exportUpload').remove()
         }
