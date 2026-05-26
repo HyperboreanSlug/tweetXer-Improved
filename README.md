@@ -10,7 +10,7 @@ An enhanced fork of [Luca Hammer's TweetXer](https://github.com/lucahammer/tweet
 - **Drag-and-drop file picker** with a clear dropzone (click still works too).
 - **Live progress bar** showing percentage, a running **rate** (per second/minute), and an **ETA**.
 - **Auto-pause** — automatically pause for a set duration after every N deletions to avoid rate limits and account locks. Defaults to **15 minutes after every 190 deletions**, both configurable.
-- **Spare by likes** — keep Tweets that have more than a chosen number of likes (requires `tweets.js`, which includes like counts).
+- **Spare by likes** — keep Tweets that have more than a chosen number of likes. Reads counts instantly from `tweets.js`, or optionally fetches each Tweet's **live** like count from X (works with `tweet-headers.js` too, at the cost of one extra request per Tweet).
 - **Spare recent days** — keep the most recent N days of Tweets. The date is decoded from each Tweet's ID, so it works with any tweet file.
 
 All the original capabilities (bookmark export, slow delete without a file, unfollow everyone, DM deletion, skip/resume) are still here.
@@ -35,12 +35,13 @@ Open **Advanced options** in the panel to configure:
 | Option | What it does |
 | --- | --- |
 | **Skip the oldest N items** | Skip the first N items (for resuming). Empty = auto-detect. |
-| **Spare tweets with more than N likes** | Keep popular Tweets. Requires `tweets.js`. |
+| **Spare tweets with more than N likes** | Keep popular Tweets. Uses counts from `tweets.js`, or enable live fetching below. |
+| **Fetch live like counts from X** | Look up each Tweet's current like count via the API right before deleting it. Works with `tweet-headers.js`; adds one request per Tweet. |
 | **Spare tweets from the last N days** | Keep your most recent Tweets (e.g. last 30 days). |
 | **Pause after every N deletions** | Auto-pause cadence. Default `190`. Set `0` to disable. |
 | **Pause duration (minutes)** | How long each auto-pause lasts. Default `15`. |
 | **Export bookmarks** | Export bookmarks (not included in the official data export). |
-| **Slow delete without file** | Delete directly from your profile if you have no export (much slower). |
+| **Slow delete without file** | Delete directly from your profile if you have no export (much slower). Honors the like threshold by reading each Tweet's count straight from the UI — no extra requests. |
 | **Unfollow everyone** | Unfollow every account you follow. |
 
 ## Supported files

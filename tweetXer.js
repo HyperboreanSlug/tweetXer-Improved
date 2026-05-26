@@ -47,6 +47,12 @@
         startCount: 0,
         pauseEvery: 190,
         pauseMinutes: 15,
+        spareThreshold: 0,
+        liveLikes: false,
+        sparedCount: 0,
+        // TweetResultByRestId query id. X rotates these; if live like lookups
+        // return 400/404, copy the current one from the DevTools Network tab.
+        tweetResultQueryId: '7xflPyRiUxGVbJd4uWmbKg',
 
         async init() {
             this.baseUrl = `https://${window.location.hostname}`
@@ -96,11 +102,16 @@
             this.pauseEvery = isNaN(every) ? 190 : every
             const mins = parseFloat(document.getElementById('pauseMinutes')?.value)
             this.pauseMinutes = isNaN(mins) ? 15 : mins
+            const likes = parseInt(document.getElementById('spareLikes')?.value, 10)
+            this.spareThreshold = isNaN(likes) ? 0 : likes
+            this.liveLikes = !!(document.getElementById('liveLikes')?.checked)
         },
 
         // Keep tweets with more than the chosen number of likes.
         // Like counts are only present in tweets.js, not in tweet-headers.js.
         filterByLikes(entries) {
+            // Live mode looks up current like counts inline during deletion instead.
+            if (document.getElementById('liveLikes')?.checked) return entries
             const spareLikes = parseInt(document.getElementById('spareLikes')?.value, 10) || 0
             if (spareLikes <= 0) return entries
             if (!entries.length || entries[0].tweet.favorite_count === undefined) {
@@ -148,6 +159,91 @@
                 remaining--
             }
             this.updateTitle(prevTitle)
+        },
+
+        // Look up a tweet's current like count via GraphQL.
+        // Returns a number, or null if it can't be determined.
+        async getLikeCount(id) {
+            const variables = JSON.stringify({ tweetId: id, withCommunity: false, includePromotedContent: false, withVoice: false })
+            const features = JSON.stringify({
+                creator_subscriptions_tweet_preview_api_enabled: true,
+                communities_web_enable_tweet_community_results_fetch: true,
+                c9s_tweet_anatomy_moderator_badge_enabled: true,
+                articles_preview_enabled: true,
+                responsive_web_edit_tweet_api_enabled: true,
+                graphql_is_translatable_rweb_tweet_is_translatable_enabled: true,
+                view_counts_everywhere_api_enabled: true,
+                longform_notetweets_consumption_enabled: true,
+                responsive_web_twitter_article_tweet_consumption_enabled: true,
+                tweet_awards_web_tipping_enabled: false,
+                creator_subscriptions_quote_tweet_preview_enabled: false,
+                freedom_of_speech_not_reach_fetch_enabled: true,
+                standardized_nudges_misinfo: true,
+                tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled: true,
+                rweb_video_timestamps_enabled: true,
+                longform_notetweets_rich_text_read_enabled: true,
+                longform_notetweets_inline_media_enabled: true,
+                responsive_web_graphql_exclude_directive_enabled: true,
+                verified_phone_label_enabled: false,
+                responsive_web_graphql_skip_user_profile_image_extensions_enabled: false,
+                responsive_web_graphql_timeline_navigation_enabled: true,
+                responsive_web_enhance_cards_enabled: false,
+                rweb_tipjar_consumption_enabled: true,
+                premium_content_api_read_enabled: false,
+                responsive_web_grok_analyze_button_fetch_trends_enabled: false,
+                responsive_web_grok_analyze_post_followups_enabled: false,
+                responsive_web_grok_share_attachment_enabled: false,
+                profile_label_improvements_pcf_label_in_post_enabled: false,
+                responsive_web_grok_image_annotation_enabled: false,
+                tweetypie_unmention_optimization_enabled: true
+            })
+            const fieldToggles = JSON.stringify({ withArticleRichContentState: true, withArticlePlainText: false, withGrokAnalyze: false, withDisallowedReplyControls: false })
+            const url = `${this.baseUrl}/i/api/graphql/${this.tweetResultQueryId}/TweetResultByRestId?` + new URLSearchParams({ variables, features, fieldToggles })
+
+            for (let attempt = 0; attempt < 2; attempt++) {
+                try {
+                    const response = await fetch(url, {
+                        headers: {
+                            authorization: this.authorization,
+                            'content-type': 'application/json',
+                            'x-client-transaction-id': this.transaction_id,
+                            'x-csrf-token': this.ct0,
+                            'x-twitter-active-user': 'yes',
+                            'x-twitter-auth-type': 'OAuth2Session'
+                        },
+                        referrer: `${this.baseUrl}/${this.username}`,
+                        referrerPolicy: 'strict-origin-when-cross-origin',
+                        method: 'GET',
+                        mode: 'cors',
+                        credentials: 'include',
+                        signal: AbortSignal.timeout(5000)
+                    })
+
+                    if (response.status === 200) {
+                        const data = await response.json()
+                        let result = data?.data?.tweetResult?.result
+                        if (result && result.tweet) result = result.tweet
+                        const likes = result?.legacy?.favorite_count
+                        return likes == null ? null : parseInt(likes, 10)
+                    }
+                    if (response.status === 429) {
+                        const reset = parseInt(response.headers.get('x-rate-limit-reset'), 10)
+                        let sleeptime = reset ? reset - Math.floor(Date.now() / 1000) : 60
+                        while (sleeptime > 0) {
+                            this.updateInfo(`Ratelimited reading likes. Waiting ${sleeptime}s. ${this.dCount} deleted.`)
+                            await this.sleep(1000)
+                            sleeptime = reset ? reset - Math.floor(Date.now() / 1000) : sleeptime - 1
+                        }
+                        continue
+                    }
+                    console.log(`Like lookup failed (HTTP ${response.status}). You may need to update tweetResultQueryId/features.`)
+                    return null
+                } catch (error) {
+                    console.log('Like lookup error:', error)
+                    return null
+                }
+            }
+            return null
         },
 
         createProgressBar() {
@@ -362,6 +458,8 @@
             #${dId} .tx-input{width:100%;padding:9px 12px;border-radius:10px;border:1px solid var(--tx-border);background:rgba(0,0,0,.25);color:var(--tx-text);font-size:14px;font-family:inherit;outline:none;transition:.15s}
             #${dId} .tx-input:focus{border-color:var(--tx-accent);box-shadow:0 0 0 3px rgba(29,155,240,.25)}
             #${dId} .tx-input+.tx-label{margin-top:12px}
+            #${dId} .tx-check{display:flex;align-items:flex-start;gap:8px;margin-top:12px;font-size:13px;color:var(--tx-muted);cursor:pointer;line-height:1.4}
+            #${dId} .tx-check input{flex:0 0 auto;width:16px;height:16px;margin-top:1px;accent-color:var(--tx-accent);cursor:pointer}
             #${dId} .tx-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;width:100%;padding:9px 16px;border-radius:999px;border:1px solid transparent;cursor:pointer;font-size:14px;font-weight:700;font-family:inherit;transition:.15s}
             #${dId} .tx-btn-ghost{background:transparent;border-color:var(--tx-border);color:var(--tx-text)}
             #${dId} .tx-btn-ghost:hover{background:rgba(255,255,255,.08)}
@@ -410,6 +508,7 @@
                         <input id="spareLikes" type="number" class="tx-input" value="" placeholder="e.g. 100" />
                         <label class="tx-label" for="skipDays">Spare tweets from the last N days</label>
                         <input id="skipDays" type="number" class="tx-input" value="" placeholder="e.g. 30" />
+                        <label class="tx-check"><input type="checkbox" id="liveLikes" /> Fetch live like counts from X (works with tweet-headers.js; one extra request per tweet, slower)</label>
                     </div>
                     <div class="tx-section">
                         <h4>Auto-pause</h4>
@@ -656,6 +755,16 @@
         async deleteTweets() {
             while (this.tIds.length > 0) {
                 this.tId = this.tIds.pop()
+                if (this.liveLikes && this.spareThreshold > 0) {
+                    const likes = await this.getLikeCount(this.tId)
+                    if (likes !== null && likes > this.spareThreshold) {
+                        this.sparedCount++
+                        if (this.total > 0) this.total--
+                        console.log(`Spared ${this.tId} (${likes} likes). ${this.sparedCount} spared so far.`)
+                        this.updateProgressBar()
+                        continue
+                    }
+                }
                 await this.sendRequest(this.baseUrl + this.deleteURL)
             }
             this.tId = ''
@@ -814,6 +923,18 @@
             console.log("Reopen the console if there are issues to see if an error shows up.")
         },
 
+        // Read a rendered tweet's like count straight from its UI (no API request).
+        likesFromTweetElement(tweetEl) {
+            const group = tweetEl.querySelector('[role="group"][aria-label]')
+            const label = group ? group.getAttribute('aria-label') : ''
+            const match = label.match(/([\d.,]+)\s*(K|M)?\s+like/i)
+            if (!match) return 0
+            let n = parseFloat(match[1].replace(/,/g, ''))
+            if (match[2] === 'K') n *= 1000
+            else if (match[2] === 'M') n *= 1000000
+            return Math.round(n)
+        },
+
         async slowDelete() {
             //document.getElementById("toggleAdvanced").click()
             TweetsXer.readSettings()
@@ -838,7 +959,24 @@
                 // hide recommended profiles and stuff
                 document.querySelectorAll('section [data-testid="cellInnerDiv"]>div>div>div').forEach(x => x.remove())
                 document.querySelectorAll('section [data-testid="cellInnerDiv"]>div>div>[role="link"]').forEach(x => x.remove())
-                
+
+                // Spare popular tweets by reading the like count from the UI (no API call)
+                if (TweetsXer.spareThreshold > 0) {
+                    const caretEl = document.querySelector(more)
+                    const tweetEl = caretEl ? caretEl.closest('[data-testid="tweet"]') : document.querySelector('[data-testid="tweet"]')
+                    if (tweetEl) {
+                        const likes = TweetsXer.likesFromTweetElement(tweetEl)
+                        if (likes > TweetsXer.spareThreshold) {
+                            TweetsXer.sparedCount++
+                            if (TweetsXer.total > 0) TweetsXer.total--
+                            tweetEl.remove()
+                            console.log(`Spared a tweet (${likes} likes). ${TweetsXer.sparedCount} spared so far.`)
+                            TweetsXer.updateProgressBar()
+                            continue
+                        }
+                    }
+                }
+
                 try {
                     const moreElement = document.querySelector(more)
                     if (moreElement) {
