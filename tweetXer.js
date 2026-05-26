@@ -965,7 +965,9 @@
             const maxConsecutiveErrors = 5
 
             const more = '[data-testid="tweet"] [data-testid="caret"]'
-            while (document.querySelectorAll(more).length > 0) {
+            let emptyScans = 0
+            const maxEmptyScans = 12
+            while (true) {
 
                 // give the Tweets a chance to load; increase/decrease if necessary
                 // afaik the limit is 50 requests per minute
@@ -974,6 +976,23 @@
                 // hide recommended profiles and stuff
                 document.querySelectorAll('section [data-testid="cellInnerDiv"]>div>div>div').forEach(x => x.remove())
                 document.querySelectorAll('section [data-testid="cellInnerDiv"]>div>div>[role="link"]').forEach(x => x.remove())
+
+                // No Tweet in the DOM right now. The timeline may still be loading the
+                // next batch, or X hit a rate limit and replaced the list with an error.
+                // Try to recover before concluding we're done: click any retry button and
+                // scroll to coax more Tweets to load, retrying a few times first.
+                if (document.querySelectorAll(more).length === 0) {
+                    const retry = Array.from(document.querySelectorAll('[role="button"], button'))
+                        .find(b => /retry|try again|reload/i.test(b.textContent))
+                    if (retry) retry.click()
+                    window.scrollTo(0, document.body.scrollHeight)
+                    emptyScans++
+                    if (emptyScans >= maxEmptyScans) break
+                    if (emptyScans % 4 === 0) console.log(`No Tweets loaded — waiting/retrying (${emptyScans}/${maxEmptyScans}). Possibly a rate limit.`)
+                    await TweetsXer.sleep(6000)
+                    continue
+                }
+                emptyScans = 0
 
                 // Resolve the current tweet element once.
                 const caretEl = document.querySelector(more)
