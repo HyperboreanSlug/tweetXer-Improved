@@ -139,6 +139,26 @@
             return kept
         },
 
+        // Like-based sparing needs a per-tweet like count. tweet-headers.js doesn't
+        // include one, so when the user asks to spare by likes without live lookups
+        // and the uploaded file has no favorite_count, we need them to supply tweets.js.
+        needsTweetsFileForLikes(json) {
+            if (document.getElementById('liveLikes')?.checked) return false
+            const likes = parseInt(document.getElementById('spareLikes')?.value, 10)
+            if (isNaN(likes) || likes <= 0) return false
+            return !json.length || json[0].tweet.favorite_count === undefined
+        },
+
+        // Re-arm the existing file picker to ask for tweets.js instead of starting deletion.
+        promptForTweetsFile() {
+            this.updateInfo('Like-based sparing needs like counts, which tweet-headers.js doesn\'t include. Please select your tweets.js file instead, or enable "Fetch live like counts" in Advanced options.')
+            const strong = document.querySelector('#tx-drop strong')
+            if (strong) strong.textContent = 'Now choose tweets.js'
+            const span = document.querySelector('#tx-drop span')
+            if (span) span.innerHTML = 'tweets.js holds the like counts needed to spare popular tweets'
+            console.warn('Like sparing requested without live likes, but this file has no like counts. Waiting for tweets.js.')
+        },
+
         // Spare the most recent N days of tweets. The creation time is decoded
         // from the tweet's Snowflake ID, so this works for any tweet file.
         filterByDays(ids) {
@@ -322,6 +342,11 @@
                     let json = JSON.parse(evt.target.result.slice(cutpoint + 1))
 
                     if (filestart.includes('.tweet_headers.')) {
+                        if (TweetsXer.needsTweetsFileForLikes(json)) {
+                            // Wait for tweets.js (which has like counts) before deleting.
+                            TweetsXer.promptForTweetsFile()
+                            return
+                        }
                         console.log('File contains Tweets.')
                         TweetsXer.action = 'untweet'
                         TweetsXer.tIds = TweetsXer.filterByDays(TweetsXer.filterByLikes(json).map((x) => x.tweet.tweet_id))
@@ -950,6 +975,30 @@
             return Math.round(n)
         },
 
+        // Like waitForElemToExist, but resolves null after `timeout` ms instead of
+        // hanging forever. A missing menu/dialog (usually a rate limit) then becomes a
+        // recoverable error rather than a permanent freeze mid-deletion.
+        waitForElem(selector, timeout = 8000) {
+            const existing = document.querySelector(selector)
+            if (existing) return Promise.resolve(existing)
+            return new Promise(resolve => {
+                let settled = false
+                const finish = (val) => {
+                    if (settled) return
+                    settled = true
+                    observer.disconnect()
+                    clearTimeout(timer)
+                    resolve(val)
+                }
+                const observer = new MutationObserver(() => {
+                    const el = document.querySelector(selector)
+                    if (el) finish(el)
+                })
+                observer.observe(document.body, { subtree: true, childList: true })
+                const timer = setTimeout(() => finish(null), timeout)
+            })
+        },
+
         async slowDelete() {
             //document.getElementById("toggleAdvanced").click()
             TweetsXer.readSettings()
@@ -962,7 +1011,7 @@
 
             let unretweet, confirmURT, caret, menu, confirmation
             let consecutiveErrors = 0
-            const maxConsecutiveErrors = 5
+            const maxConsecutiveErrors = 8
 
             const more = '[data-testid="tweet"] [data-testid="caret"]'
             let emptyScans = 0
@@ -1033,24 +1082,29 @@
                     unretweet = document.querySelector('[data-testid="unretweet"]')
                     if (unretweet) {
                         unretweet.click()
-                        confirmURT = await waitForElemToExist('[data-testid="unretweetConfirm"]')
+                        confirmURT = await TweetsXer.waitForElem('[data-testid="unretweetConfirm"]')
+                        if (!confirmURT) throw new Error('unretweet confirmation did not appear')
                         confirmURT.click()
                     }
 
                     // delete Tweet
                     else {
-                        caret = await waitForElemToExist(more)
+                        caret = await TweetsXer.waitForElem(more)
+                        if (!caret) throw new Error('tweet menu button did not appear')
                         caret.click()
 
-                        menu = await waitForElemToExist('[role="menuitem"]')
+                        menu = await TweetsXer.waitForElem('[role="menuitem"]')
+                        if (!menu) throw new Error('tweet menu did not open')
                         if (menu.textContent.includes('@')) {
                             // don't unfollow people (because their Tweet is the reply tab)
                             caret.click()
-                            document.querySelector('[data-testid="tweet"]').remove()
+                            const notMine = document.querySelector('[data-testid="tweet"]')
+                            if (notMine) notMine.remove()
                         } else {
                             menu.click()
-                            confirmation = await waitForElemToExist('[data-testid="confirmationSheetConfirm"]')
-                            if (confirmation) confirmation.click()
+                            confirmation = await TweetsXer.waitForElem('[data-testid="confirmationSheetConfirm"]')
+                            if (!confirmation) throw new Error('delete confirmation did not appear')
+                            confirmation.click()
                         }
                     }
 
@@ -1065,10 +1119,17 @@
                     if (TweetsXer.dCount % 100 == 0) console.log(`${new Date().toUTCString()} Deleted ${TweetsXer.dCount} Tweets`)
                     
                 } catch (error) {
-                    console.error(`Error deleting tweet: ${error.message}`)
+                    // A missing menu/dialog is almost always a temporary rate limit, not the
+                    // end of the timeline. Close anything half-open, back off, and retry the
+                    // same tweet rather than silently freezing or quitting after one batch.
                     consecutiveErrors++
+                    console.error(`Error deleting tweet (attempt ${consecutiveErrors}/${maxConsecutiveErrors}): ${error.message}`)
+                    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+                    const backoff = Math.min(60000, 4000 * consecutiveErrors)
+                    TweetsXer.updateInfo(`Hit a snag (likely a rate limit). Waiting ${Math.round(backoff / 1000)}s, then retrying. ${TweetsXer.dCount} deleted so far.`)
+                    await TweetsXer.sleep(backoff)
                     if (consecutiveErrors >= maxConsecutiveErrors) {
-                        console.log(`${consecutiveErrors} consecutive errors. Stopping.`)
+                        console.log(`${consecutiveErrors} consecutive errors. Stopping. Reload the page and run Slow delete again to continue where it left off.`)
                         break
                     }
                 }
